@@ -1,0 +1,10 @@
+[
+  {"id":"whois","label":"WHOIS","icon":"⬡","desc":"Registrar, owner, dates"},
+  {"id":"dns","label":"DNS Records","icon":"◈","desc":"A, MX, NS, TXT, CNAME"},
+  {"id":"geo","label":"Geolocation","icon":"◎","desc":"Country, city, ASN, ISP"},
+  {"id":"ports","label":"Open Ports","icon":"▣","desc":"Common port scan"},
+  {"id":"ssl","label":"SSL/TLS","icon":"◆","desc":"Certificate details"},
+  {"id":"subdomains","label":"Subdomains","icon":"⬙","desc":"Subdomain enumeration"},
+  {"id":"reputation","label":"Reputation","icon":"◉","desc":"Blacklists, abuse score"},
+  {"id":"headers","label":"HTTP Headers","icon":"≡","desc":"Server tech stack"}
+]
