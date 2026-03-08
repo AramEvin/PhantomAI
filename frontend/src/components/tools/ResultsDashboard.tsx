@@ -4,15 +4,14 @@ import AIAnalysisCard from './AIAnalysisCard'
 import ToolCard from './ToolCard'
 import SummaryBar from './SummaryBar'
 import ScanProgress from './ScanProgress'
+import TargetMap from './TargetMap'
 
 const TOOL_ORDER = ['geoip', 'whois', 'dns', 'ssl', 'subdomains', 'http_headers', 'shodan', 'virustotal', 'blacklist']
 
 export default function ResultsDashboard() {
   const { investigation, isLoading, error } = useInvestigationStore()
 
-  if (isLoading) {
-    return <ScanProgress />
-  }
+  if (isLoading) return <ScanProgress />
 
   if (error) {
     return (
@@ -25,11 +24,19 @@ export default function ResultsDashboard() {
   if (!investigation) return null
 
   const tools = TOOL_ORDER.filter(t => investigation.results[t])
+  const geoip = investigation.results['geoip']
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+
       <SummaryBar investigation={investigation} />
 
+      {/* Map — full width */}
+      {geoip?.status === 'success' && (
+        <TargetMap geoip={geoip} target={investigation.target} />
+      )}
+
+      {/* AI card — full width below map */}
       {investigation.ai_analysis
         ? <AIAnalysisCard analysis={investigation.ai_analysis} />
         : (
@@ -45,6 +52,7 @@ export default function ResultsDashboard() {
         )
       }
 
+      {/* Tool results */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4 }}>
         <h2 style={{ fontSize: 14, fontWeight: 700, color: '#94a3b8', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: 2, margin: 0 }}>
           🔧 OSINT Tool Results
