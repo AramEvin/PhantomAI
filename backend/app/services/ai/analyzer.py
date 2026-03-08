@@ -21,71 +21,71 @@ ANALYSIS_PROMPT = """Perform a comprehensive security analysis for target: {targ
 RAW OSINT DATA:
 {data}
 
-DEEP ANALYSIS REQUIRED — cover ALL of these areas if data is available:
+DEEP ANALYSIS REQUIRED:
 
 1. INFRASTRUCTURE FINGERPRINTING
-   - Hosting provider, datacenter, cloud vs dedicated
-   - Server software stack (web server, framework, OS)
-   - Network topology indicators (ASN, IP ranges, CDN usage)
-
 2. ATTACK SURFACE MAPPING
-   - All exposed services and ports
-   - External entry points (subdomains, APIs, mail servers)
-   - SSL/TLS configuration weaknesses
-   - Missing security headers as attack vectors
-
 3. PORT & SERVICE RISK SCORING
-   - Risk assessment for each open port/service
-   - Dangerous services (RDP, Telnet, FTP, old SSH)
-   - Service version exposure and known CVEs
-
-4. THREAT INTELLIGENCE SUMMARY
-   - Blacklist/reputation status
-   - Historical abuse indicators
-   - VirusTotal/malware findings
-   - Overall threat actor potential
+4. THREAT INTELLIGENCE
+5. SEVERITY-TAGGED FINDINGS with REMEDIATION
 
 Return ONLY this JSON:
 {{
-  "summary": "4-6 sentence comprehensive summary covering infrastructure, ownership, threat posture, and key risks",
+  "summary": "4-6 sentence summary covering infrastructure, ownership, threat posture, key risks",
   "risk_level": "low|medium|high|critical",
   "risk_score": <integer 0-100>,
   "infrastructure": {{
-    "hosting_provider": "provider name or unknown",
-    "server_type": "web server/stack info or unknown",
-    "cdn_detected": true/false,
-    "cloud_provider": "AWS/GCP/Azure/Hetzner/etc or unknown",
-    "fingerprint_notes": ["note1", "note2"]
+    "hosting_provider": "string",
+    "server_type": "string",
+    "cdn_detected": true,
+    "cloud_provider": "string",
+    "fingerprint_notes": ["note1"]
   }},
   "attack_surface": {{
-    "total_entry_points": <integer>,
-    "exposed_services": ["service:port", "..."],
-    "subdomains_count": <integer>,
-    "critical_exposures": ["exposure1", "..."],
-    "ssl_issues": ["issue1", "..."]
+    "total_entry_points": 0,
+    "exposed_services": ["service:port"],
+    "subdomains_count": 0,
+    "critical_exposures": ["exposure1"],
+    "ssl_issues": ["issue1"]
   }},
   "port_risks": [
-    {{"port": <int>, "service": "name", "risk": "low|medium|high|critical", "note": "why"}}
+    {{"port": 80, "service": "http", "risk": "low|medium|high|critical", "note": "reason"}}
   ],
   "threat_intel": {{
     "blacklist_status": "clean|listed",
-    "blacklist_count": <integer>,
-    "reputation_score": <integer 0-100, 100=best>,
-    "malware_detected": true/false,
-    "threat_indicators": ["indicator1", "..."],
-    "abuse_history": "none detected|description"
+    "blacklist_count": 0,
+    "reputation_score": 100,
+    "malware_detected": false,
+    "threat_indicators": ["indicator1"],
+    "abuse_history": "none detected"
   }},
-  "key_findings": ["specific finding with real data", "..."],
-  "recommendations": ["specific actionable step", "..."],
-  "tags": ["tag1", "tag2"]
+  "severity_findings": [
+    {{
+      "severity": "critical|medium|ok",
+      "category": "SSL|Headers|Ports|Blacklist|DNS|WHOIS|Malware|Config",
+      "title": "Short title of the finding",
+      "detail": "Specific detail using real values from the scan",
+      "fix": "1. Step one\\n2. Step two\\n3. Step three — null if severity is ok"
+    }}
+  ],
+  "key_findings": ["finding1"],
+  "recommendations": ["action1"],
+  "tags": ["tag1"]
 }}
 
-Risk scoring:
-0-20: Clean, well-configured, trusted infrastructure
+Risk scoring guide:
+0-20: Clean infrastructure, trusted, well configured
 21-40: Minor issues, some missing configs
 41-60: Notable concerns, weak security posture
-61-80: High risk, multiple vulnerabilities or blacklisted
-81-100: Critical — malware, heavily blacklisted, dangerous exposure"""
+61-80: High risk, vulnerabilities or blacklisted
+81-100: Critical — malware, heavily blacklisted, dangerous
+
+Severity rules — be thorough, list ALL findings:
+CRITICAL: RDP/Telnet/FTP open, malware detected, blacklisted, no SSL, admin panel exposed
+MEDIUM: Missing security headers, weak SSL config, WHOIS privacy off, info disclosure
+OK: Valid SSL cert, clean blacklist, HSTS present, CSP configured, low VirusTotal score"""
+
+
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────

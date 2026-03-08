@@ -29,6 +29,13 @@ class ToolResult(BaseModel):
     error: Optional[str] = None
     duration_ms: Optional[float] = None
 
+class SeverityFinding(BaseModel):
+    severity: str
+    category: str
+    title: str
+    detail: str
+    fix: Optional[str] = None
+
 class AIAnalysis(BaseModel):
     summary: str
     risk_level: str
@@ -40,6 +47,7 @@ class AIAnalysis(BaseModel):
     attack_surface: Dict[str, Any] = {}
     port_risks: List[Dict[str, Any]] = []
     threat_intel: Dict[str, Any] = {}
+    severity_findings: List[SeverityFinding] = []
 
 class InvestigateResponse(BaseModel):
     target: str

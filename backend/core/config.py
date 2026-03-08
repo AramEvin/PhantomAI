@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     PORT: int = 8000
 
     # Database
-    DATABASE_URL: str = "postgresql+asyncpg://phantom:phantom@localhost:5432/phantomdb"
+    DATABASE_URL: str = "postgresql+asyncpg://user:password@localhost:5432/phantomdb"
 
     # AI Keys
     ANTHROPIC_API_KEY: str = ""
