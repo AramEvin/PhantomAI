@@ -1,0 +1,51 @@
+name: 🐍 Backend Check
+
+on:
+  push:
+    branches: [ master, dev ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  backend-check:
+    name: 🐍 Backend Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+
+      - name: Check core imports
+        run: |
+          cd backend
+          python3 -c "
+          import importlib, sys
+          modules = ['fastapi', 'uvicorn', 'sqlalchemy', 'asyncpg', 'pydantic', 'loguru', 'httpx']
+          failed = []
+          for m in modules:
+              try:
+                  importlib.import_module(m)
+                  print(f'  ✓ {m}')
+              except ImportError as e:
+                  print(f'  ✗ {m}: {e}')
+                  failed.append(m)
+          if failed:
+              sys.exit(1)
+          "
+
+      - name: Validate config loads
+        env:
+          DATABASE_URL: postgresql+asyncpg://user:password@localhost:5432/phantomdb
+          GROQ_API_KEY: test_key_for_ci
+        run: |
+          cd backend
+          python3 -c "from app.core.config import settings; print('✓ Config OK:', settings.APP_NAME)"

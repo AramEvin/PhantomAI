@@ -1,4 +1,4 @@
-name: PhantomAI Security & Build
+name: 🔐 Security Scan
 
 on:
   push:
@@ -7,9 +7,8 @@ on:
     branches: [ master ]
 
 jobs:
-
   security-scan:
-    name: 🔐 Security Scan
+    name: 🔐 Secret Detection
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -22,7 +21,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install security tools
+      - name: Install detect-secrets
         run: pip install detect-secrets
 
       - name: Scan for real secrets
@@ -36,114 +35,24 @@ jobs:
 
           python3 -c "
           import json, sys
-
           data = json.load(open('/tmp/secrets.json'))
           results = data.get('results', {})
-
-          # Skip files that are known to contain example/template values
-          skip_files = [
-              'README.md',
-              '.env.example',
-              '.secrets.baseline',
-          ]
-
-          # Skip false positive patterns (localhost dummy credentials)
-          skip_patterns = [
-              'phantom:phantom@localhost',
-              'test_key_for_ci',
-              'your_',
-          ]
-
+          skip_patterns = ['phantom:phantom@localhost', 'user:password@localhost', 'test_key_for_ci', 'your_']
           real_secrets = {}
           for filepath, secrets in results.items():
-              if any(skip in filepath for skip in skip_files):
-                  continue
-              # Read file to check context
               try:
                   content = open(filepath).read()
                   if any(p in content for p in skip_patterns):
-                      print(f'  ⚪ Skipping {filepath} (contains known example values)')
+                      print(f'  ⚪ Skipping {filepath} (example values)')
                       continue
               except:
                   pass
               real_secrets[filepath] = secrets
-
           if real_secrets:
               for f, secrets in real_secrets.items():
                   for s in secrets:
-                      print(f'🚨 SECRET FOUND: {f} line {s[\"line_number\"]} type={s[\"type\"]}')
+                      print(f'🚨 SECRET: {f} line {s[\"line_number\"]} type={s[\"type\"]}')
               sys.exit(1)
           else:
               print('✓ No real secrets detected')
           "
-
-  backend-check:
-    name: 🐍 Backend Check
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          cd backend
-          pip install -r requirements.txt
-
-      - name: Check core imports
-        run: |
-          cd backend
-          python3 -c "
-          import importlib, sys
-          modules = ['fastapi', 'uvicorn', 'sqlalchemy', 'asyncpg', 'pydantic', 'loguru', 'httpx']
-          failed = []
-          for m in modules:
-              try:
-                  importlib.import_module(m)
-                  print(f'  ✓ {m}')
-              except ImportError as e:
-                  print(f'  ✗ {m}: {e}')
-                  failed.append(m)
-          if failed:
-              sys.exit(1)
-          "
-
-      - name: Validate config loads
-        env:
-          DATABASE_URL: postgresql+asyncpg://phantom:phantom@localhost:5432/phantomdb
-          GROQ_API_KEY: test_key_for_ci
-        run: |
-          cd backend
-          python3 -c "from app.core.config import settings; print('✓ Config OK:', settings.APP_NAME)"
-
-  frontend-build:
-    name: ⚛️ Frontend Build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install dependencies
-        run: |
-          cd frontend
-          npm install --legacy-peer-deps
-
-      - name: Build
-        env:
-          VITE_API_URL: http://localhost:8000
-        run: |
-          cd frontend
-          npm run build
-
-      - name: Verify build output
-        run: |
-          test -d frontend/dist && echo "✓ Build successful" || exit 1

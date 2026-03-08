@@ -1,0 +1,36 @@
+name: ⚛️ Frontend Build
+
+on:
+  push:
+    branches: [ master, dev ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  frontend-build:
+    name: ⚛️ Frontend Build & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          cd frontend
+          npm install --legacy-peer-deps
+
+      - name: Build
+        env:
+          VITE_API_URL: http://localhost:8000
+        run: |
+          cd frontend
+          npm run build
+
+      - name: Verify build output
+        run: |
+          test -d frontend/dist && echo "✓ Build successful" || exit 1
