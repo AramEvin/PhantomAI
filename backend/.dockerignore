@@ -1,0 +1,33 @@
+# ─────────────────────────────────────────────────────────────
+# .dockerignore for backend
+# Files listed here are NOT copied into the Docker image
+# WHY: Keeps image small and prevents secrets from leaking in
+# ─────────────────────────────────────────────────────────────
+
+# Never include secrets
+.env
+*.env
+
+# Python cache — gets regenerated inside container
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments — we install fresh inside container
+venv/
+.venv/
+env/
+
+# Logs
+*.log
+logs/
+
+# Git history — not needed in image
+.git/
+.gitignore
+
+# Dev tools
+.vscode/
+.idea/

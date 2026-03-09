@@ -1,20 +1,133 @@
-version: '3.8'
+# Version of Docker Compose file format
+version: '3.9'
+
 services:
-  backend:
-    build:
-      context: ./backend
-      dockerfile: ../docker/Dockerfile.backend
-    ports:
-      - "8000:8000"
-    env_file: ./backend/.env
+
+  # ── PostgreSQL Database ─────────────────────────────────────
+  postgres:
+    # Use official PostgreSQL 16 image from Docker Hub
+    image: postgres:16-alpine
+
+    # Container name (used in logs and docker commands)
+    container_name: phantomdb
+
+    # Restart policy:
+    # unless-stopped = restart automatically if it crashes,
+    # but don't restart if you manually stopped it
     restart: unless-stopped
 
+    # Environment variables for PostgreSQL setup
+    # These are only used on FIRST run to create the database
+    environment:
+      POSTGRES_USER: phantom
+      POSTGRES_PASSWORD: phantom
+      POSTGRES_DB: phantomdb
+
+    # Volumes — persist data outside the container
+    # WHY: If the container is deleted, the database survives
+    # phantom_pgdata = named volume managed by Docker
+    volumes:
+      - phantom_pgdata:/var/lib/postgresql/data
+
+    # Networks — which internal network this container joins
+    # Containers on the same network can reach each other by service name
+    networks:
+      - phantom_net
+
+    # Health check — wait for PostgreSQL to be ready
+    # before backend tries to connect
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U phantom -d phantomdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── FastAPI Backend ─────────────────────────────────────────
+  backend:
+    # Build from local Dockerfile instead of pulling from Docker Hub
+    build:
+      context: ./backend       # build context = the backend/ folder
+      dockerfile: Dockerfile   # use backend/Dockerfile
+
+    container_name: phantomapi
+
+    restart: unless-stopped
+
+    # Environment variables passed into the container
+    # These override defaults in config.py
+    # DATABASE_URL uses "postgres" (service name) instead of localhost
+    # WHY: Inside Docker network, containers reach each other by service name
+    environment:
+      DATABASE_URL: postgresql+asyncpg://phantom:phantom@postgres:5432/phantomdb
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      COHERE_API_KEY: ${COHERE_API_KEY:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      SHODAN_API_KEY: ${SHODAN_API_KEY:-}
+      VIRUSTOTAL_API_KEY: ${VIRUSTOTAL_API_KEY:-}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+
+    # Port mapping: <host port>:<container port>
+    # Exposes container port 8000 as host port 8000
+    ports:
+      - "8000:8000"
+
+    # depends_on — start postgres BEFORE backend
+    # condition: service_healthy = wait until healthcheck passes
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    networks:
+      - phantom_net
+
+    # Health check for backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── React Frontend (Nginx) ──────────────────────────────────
   frontend:
     build:
       context: ./frontend
-      dockerfile: ../docker/Dockerfile.frontend
-    ports:
-      - "5173:80"
-    depends_on:
-      - backend
+      dockerfile: Dockerfile
+      # Pass the backend URL at build time
+      # Vite bakes VITE_API_URL into the JS bundle during build
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+
+    container_name: phantomui
+
     restart: unless-stopped
+
+    # Port mapping: host 3000 → container 80
+    # Access the app at http://localhost:3000
+    ports:
+      - "3000:80"
+
+    # Wait for backend to be healthy before starting frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+
+    networks:
+      - phantom_net
+
+# ── Named Volumes ───────────────────────────────────────────
+# phantom_pgdata persists the PostgreSQL database
+# Survives container restarts and rebuilds
+volumes:
+  phantom_pgdata:
+    driver: local
+
+# ── Networks ────────────────────────────────────────────────
+# phantom_net = private internal network for our containers
+# Containers on this network can talk to each other by service name
+# postgres, backend, and frontend can all reach each other
+networks:
+  phantom_net:
+    driver: bridge

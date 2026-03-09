@@ -11,6 +11,7 @@ interface GeoData {
   org?: string
   asn?: string
   region?: string
+  timezone?: string
 }
 
 interface Props {
@@ -23,42 +24,32 @@ export default function TargetMap({ geoip, target }: Props) {
   const mapInstanceRef = useRef<any>(null)
 
   const geo = geoip?.data
-  const hasCoords = geo?.latitude && geo?.longitude
+  const hasCoords = geo?.latitude != null && geo?.longitude != null
 
   useEffect(() => {
     if (!hasCoords || !mapRef.current) return
-    if (mapInstanceRef.current) {
-      mapInstanceRef.current.remove()
-      mapInstanceRef.current = null
-    }
 
-    // Dynamically load Leaflet
-    const loadLeaflet = async () => {
-      // Load CSS
-      if (!document.getElementById('leaflet-css')) {
-        const link = document.createElement('link')
-        link.id = 'leaflet-css'
-        link.rel = 'stylesheet'
-        link.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css'
-        document.head.appendChild(link)
-      }
+    const lat = geo!.latitude!
+    const lng = geo!.longitude!
 
-      // Load JS
-      if (!(window as any).L) {
-        await new Promise<void>((resolve) => {
-          const script = document.createElement('script')
-          script.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js'
-          script.onload = () => resolve()
-          document.head.appendChild(script)
-        })
-      }
-
+    const initMap = () => {
       const L = (window as any).L
-      if (!mapRef.current || mapInstanceRef.current) return
+      if (!L || !mapRef.current) return
 
-      // Dark tile layer
+      // ALWAYS destroy previous map instance before creating new one
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove()
+        mapInstanceRef.current = null
+      }
+
+      // Also clear any leftover leaflet state on the div
+      const container = mapRef.current as any
+      if (container._leaflet_id) {
+        delete container._leaflet_id
+      }
+
       const map = L.map(mapRef.current, {
-        center: [geo.latitude, geo.longitude],
+        center: [lat, lng],
         zoom: 6,
         zoomControl: true,
         attributionControl: false,
@@ -66,27 +57,25 @@ export default function TargetMap({ geoip, target }: Props) {
 
       mapInstanceRef.current = map
 
-      // Dark map tiles (CartoDB Dark Matter — free, no API key)
       L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         maxZoom: 19,
       }).addTo(map)
 
-      // Custom purple marker
       const icon = L.divIcon({
         html: `
           <div style="
-            width: 24px; height: 24px;
+            width: 22px; height: 22px;
             background: #7c3aed;
             border: 3px solid #a78bfa;
             border-radius: 50% 50% 50% 0;
             transform: rotate(-45deg);
-            box-shadow: 0 0 12px rgba(124,58,237,0.8), 0 0 24px rgba(124,58,237,0.4);
+            box-shadow: 0 0 12px rgba(124,58,237,0.9), 0 0 24px rgba(124,58,237,0.5);
           "></div>
         `,
         className: '',
-        iconSize: [24, 24],
-        iconAnchor: [12, 24],
-        popupAnchor: [0, -28],
+        iconSize: [22, 22],
+        iconAnchor: [11, 22],
+        popupAnchor: [0, -26],
       })
 
       const popup = L.popup({
@@ -106,33 +95,59 @@ export default function TargetMap({ geoip, target }: Props) {
             📍 ${target}
           </div>
           <div style="color: #94a3b8; font-size: 11px; line-height: 1.8;">
-            ${geo.city ? `<div>🏙 ${geo.city}${geo.region ? ', ' + geo.region : ''}</div>` : ''}
-            ${geo.country ? `<div>🌍 ${geo.country}</div>` : ''}
-            ${geo.isp ? `<div>🌐 ${geo.isp}</div>` : ''}
-            ${geo.asn ? `<div>🔢 ${geo.asn}</div>` : ''}
+            ${geo!.city ? `<div>🏙 ${geo!.city}${geo!.region ? ', ' + geo!.region : ''}</div>` : ''}
+            ${geo!.country ? `<div>🌍 ${geo!.country}</div>` : ''}
+            ${geo!.isp ? `<div>🌐 ${geo!.isp}</div>` : ''}
+            ${geo!.asn ? `<div>🔢 ${geo!.asn}</div>` : ''}
             <div style="color: #475569; margin-top: 4px; font-size: 10px;">
-              ${geo.latitude?.toFixed(4)}, ${geo.longitude?.toFixed(4)}
+              ${lat.toFixed(4)}, ${lng.toFixed(4)}
             </div>
           </div>
         </div>
       `)
 
-      L.marker([geo.latitude, geo.longitude], { icon })
+      L.marker([lat, lng], { icon })
         .addTo(map)
         .bindPopup(popup)
         .openPopup()
 
-      // Pulse circle
-      L.circle([geo.latitude, geo.longitude], {
+      L.circle([lat, lng], {
         color: '#7c3aed',
         fillColor: '#7c3aed',
         fillOpacity: 0.08,
         weight: 1,
         radius: 50000,
       }).addTo(map)
+
+      // Force map to recalculate size after render
+      setTimeout(() => map.invalidateSize(), 100)
     }
 
-    loadLeaflet()
+    // Load Leaflet CSS
+    if (!document.getElementById('leaflet-css')) {
+      const link = document.createElement('link')
+      link.id = 'leaflet-css'
+      link.rel = 'stylesheet'
+      link.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css'
+      document.head.appendChild(link)
+    }
+
+    // Load Leaflet JS then init
+    if ((window as any).L) {
+      initMap()
+    } else {
+      const existing = document.getElementById('leaflet-js')
+      if (existing) {
+        // Script already loading — wait for it
+        existing.addEventListener('load', initMap)
+      } else {
+        const script = document.createElement('script')
+        script.id = 'leaflet-js'
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js'
+        script.onload = initMap
+        document.head.appendChild(script)
+      }
+    }
 
     return () => {
       if (mapInstanceRef.current) {
@@ -140,7 +155,7 @@ export default function TargetMap({ geoip, target }: Props) {
         mapInstanceRef.current = null
       }
     }
-  }, [geo?.latitude, geo?.longitude])
+  }, [target, geo?.latitude, geo?.longitude]) // ← re-run when target OR coords change
 
   if (!geoip || geoip.status !== 'success' || !hasCoords) {
     return (
@@ -162,7 +177,7 @@ export default function TargetMap({ geoip, target }: Props) {
       {/* Header */}
       <div style={{
         padding: '12px 16px', borderBottom: '1px solid #1e1e2e',
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between'
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: 16 }}>🌍</span>
@@ -170,7 +185,7 @@ export default function TargetMap({ geoip, target }: Props) {
             Target Location
           </span>
         </div>
-        <div style={{ display: 'flex', align: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           {geo.city && (
             <span style={{ fontSize: 11, fontFamily: 'monospace', color: '#a78bfa' }}>
               📍 {geo.city}{geo.country ? `, ${geo.country}` : ''}
@@ -184,8 +199,9 @@ export default function TargetMap({ geoip, target }: Props) {
         </div>
       </div>
 
-      {/* Map container */}
+      {/* Map — key forces full remount when target changes */}
       <div
+        key={`${target}-${geo.latitude}-${geo.longitude}`}
         ref={mapRef}
         style={{ height: 280, width: '100%', background: '#0a0a0f' }}
       />
@@ -199,7 +215,7 @@ export default function TargetMap({ geoip, target }: Props) {
           { icon: '🌐', label: 'ISP', value: geo.isp },
           { icon: '🏢', label: 'Org', value: geo.org },
           { icon: '🔢', label: 'ASN', value: geo.asn },
-          { icon: '⏰', label: 'Timezone', value: (geo as any).timezone },
+          { icon: '⏰', label: 'Timezone', value: geo.timezone },
         ].filter(i => i.value).map(item => (
           <div key={item.label}>
             <div style={{ fontSize: 10, fontFamily: 'monospace', color: '#334155', textTransform: 'uppercase' }}>
@@ -212,19 +228,14 @@ export default function TargetMap({ geoip, target }: Props) {
         ))}
       </div>
 
-      {/* Popup styles injected globally */}
       <style>{`
         .phantom-popup .leaflet-popup-content-wrapper {
           background: transparent !important;
           box-shadow: none !important;
           padding: 0 !important;
         }
-        .phantom-popup .leaflet-popup-content {
-          margin: 0 !important;
-        }
-        .phantom-popup .leaflet-popup-tip-container {
-          display: none !important;
-        }
+        .phantom-popup .leaflet-popup-content { margin: 0 !important; }
+        .phantom-popup .leaflet-popup-tip-container { display: none !important; }
         .leaflet-control-zoom {
           border: 1px solid #1e1e2e !important;
           background: #12121a !important;
@@ -234,9 +245,7 @@ export default function TargetMap({ geoip, target }: Props) {
           color: #a78bfa !important;
           border-bottom: 1px solid #1e1e2e !important;
         }
-        .leaflet-control-zoom a:hover {
-          background: #1e1e2e !important;
-        }
+        .leaflet-control-zoom a:hover { background: #1e1e2e !important; }
       `}</style>
     </div>
   )

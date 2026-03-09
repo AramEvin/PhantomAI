@@ -1,0 +1,22 @@
+# ─────────────────────────────────────────────────────────────
+# .dockerignore for frontend
+# ─────────────────────────────────────────────────────────────
+
+# Never include secrets
+.env
+*.env
+
+# node_modules is huge (~300MB) — reinstalled fresh inside container
+node_modules/
+
+# Previous build output — rebuilt fresh inside container
+dist/
+.vite/
+
+# Git
+.git/
+.gitignore
+
+# Dev tools
+.vscode/
+.idea/
