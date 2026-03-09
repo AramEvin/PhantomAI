@@ -1,7 +1,7 @@
 """
 PhantomAI Multi-AI Analyzer
-Providers: Claude, GPT-4o, Gemini, Groq, Cohere, Mistral, Ollama
-Deep analysis: ports, threat intel, attack surface, infrastructure fingerprinting
+Providers: Claude, GPT-4o, Gemini, Groq, Cohere, Mistral, DeepSeek, Grok, Perplexity, Together, Ollama
+Deep analysis: ports, threat intel, attack surface, infrastructure fingerprinting, CVE lookup
 Merges all results into one unified report
 """
 import json
@@ -10,7 +10,7 @@ import asyncio
 from loguru import logger
 from app.core.config import settings
 
-# ─── Prompts ────────────────────────────────────────────────────────────────
+# ─── Prompts ─────────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are PhantomAI, an elite cybersecurity analyst and threat intelligence expert.
 Analyze OSINT data and return ONLY valid JSON. No markdown. No explanation outside JSON.
@@ -22,12 +22,12 @@ RAW OSINT DATA:
 {data}
 
 DEEP ANALYSIS REQUIRED:
-
 1. INFRASTRUCTURE FINGERPRINTING
 2. ATTACK SURFACE MAPPING
 3. PORT & SERVICE RISK SCORING
 4. THREAT INTELLIGENCE
 5. SEVERITY-TAGGED FINDINGS with REMEDIATION
+6. CVE LOOKUP — identify software versions from scan data and list known CVEs
 
 Return ONLY this JSON:
 {{
@@ -59,10 +59,20 @@ Return ONLY this JSON:
     "threat_indicators": ["indicator1"],
     "abuse_history": "none detected"
   }},
+  "cve_findings": [
+    {{
+      "software": "Apache 2.4.49",
+      "cve_id": "CVE-2021-41773",
+      "severity": "critical|high|medium|low",
+      "cvss_score": 9.8,
+      "description": "Path traversal and RCE vulnerability",
+      "fix": "Upgrade to Apache 2.4.51 or later"
+    }}
+  ],
   "severity_findings": [
     {{
       "severity": "critical|medium|ok",
-      "category": "SSL|Headers|Ports|Blacklist|DNS|WHOIS|Malware|Config",
+      "category": "SSL|Headers|Ports|Blacklist|DNS|WHOIS|Malware|Config|CVE",
       "title": "Short title of the finding",
       "detail": "Specific detail using real values from the scan",
       "fix": "1. Step one\\n2. Step two\\n3. Step three — null if severity is ok"
@@ -80,12 +90,17 @@ Risk scoring guide:
 61-80: High risk, vulnerabilities or blacklisted
 81-100: Critical — malware, heavily blacklisted, dangerous
 
+CVE rules:
+- Extract ALL software names and versions from the scan data (server headers, SSL cert, Shodan banners)
+- Look up real CVEs for those exact versions
+- If no version detected, skip that software
+- Only include CVEs you are confident about for the detected version
+- CVSS score must be a real number (0.0-10.0)
+
 Severity rules — be thorough, list ALL findings:
-CRITICAL: RDP/Telnet/FTP open, malware detected, blacklisted, no SSL, admin panel exposed
-MEDIUM: Missing security headers, weak SSL config, WHOIS privacy off, info disclosure
+CRITICAL: RDP/Telnet/FTP open, malware detected, blacklisted, no SSL, admin panel exposed, critical CVE
+MEDIUM: Missing security headers, weak SSL config, WHOIS privacy off, info disclosure, medium CVE
 OK: Valid SSL cert, clean blacklist, HSTS present, CSP configured, low VirusTotal score"""
-
-
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -136,7 +151,6 @@ def merge_results(results: list) -> dict | None:
         key=lambda x: risk_order.index(x) if x in risk_order else 0
     )
 
-    # Deduplicate and merge lists
     def merge_list(key):
         seen = set()
         out = []
@@ -148,7 +162,6 @@ def merge_results(results: list) -> dict | None:
                     out.append(item)
         return out
 
-    # Best summary = longest
     best_summary = max((r.get("summary", "") for r in valid), key=len)
 
     # Merge infrastructure
@@ -186,7 +199,7 @@ def merge_results(results: list) -> dict | None:
         ))
         attack["exposed_services"] = services
 
-    # Merge port risks - dedupe by port
+    # Merge port risks — dedupe by port number
     port_map = {}
     for r in valid:
         for p in r.get("port_risks", []):
@@ -210,6 +223,25 @@ def merge_results(results: list) -> dict | None:
         ))
         threat["threat_indicators"] = indicators
 
+    # Merge CVE findings — dedupe by cve_id
+    cve_map = {}
+    for r in valid:
+        for c in r.get("cve_findings", []):
+            cve_id = c.get("cve_id", "")
+            if cve_id and cve_id not in cve_map:
+                cve_map[cve_id] = c
+    # Sort CVEs by CVSS score descending
+    cve_findings = sorted(cve_map.values(), key=lambda x: x.get("cvss_score", 0), reverse=True)
+
+    # Merge severity findings — dedupe by title
+    sev_map = {}
+    for r in valid:
+        for f in r.get("severity_findings", []):
+            title = f.get("title", "").lower()[:60]
+            if title and title not in sev_map:
+                sev_map[title] = f
+    severity_findings = list(sev_map.values())
+
     return {
         "summary": best_summary,
         "risk_level": max_risk,
@@ -218,6 +250,8 @@ def merge_results(results: list) -> dict | None:
         "attack_surface": attack,
         "port_risks": port_risks,
         "threat_intel": threat,
+        "cve_findings": cve_findings,
+        "severity_findings": severity_findings,
         "key_findings": merge_list("key_findings")[:12],
         "recommendations": merge_list("recommendations")[:8],
         "tags": list(set(t for r in valid for t in r.get("tags", []))),
@@ -287,7 +321,7 @@ async def call_gemini(data_str: str, target: str) -> dict | None:
     except Exception as e:
         err = str(e)
         if "429" in err or "quota" in err.lower():
-            logger.warning("Gemini: rate limited — will retry next scan")
+            logger.warning("Gemini: rate limited")
         else:
             logger.error(f"Gemini error: {e}")
         return None
@@ -357,8 +391,105 @@ async def call_mistral(data_str: str, target: str) -> dict | None:
         logger.error(f"Mistral error: {e}")
         return None
 
+async def call_deepseek(data_str: str, target: str) -> dict | None:
+    if not settings.DEEPSEEK_API_KEY or "your_" in settings.DEEPSEEK_API_KEY:
+        return None
+    try:
+        from openai import AsyncOpenAI
+        # DeepSeek uses OpenAI-compatible API
+        client = AsyncOpenAI(
+            api_key=settings.DEEPSEEK_API_KEY,
+            base_url="https://api.deepseek.com"
+        )
+        resp = await client.chat.completions.create(
+            model="deepseek-chat", max_tokens=3000,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": ANALYSIS_PROMPT.format(target=target, data=data_str)}
+            ]
+        )
+        result = parse_json(resp.choices[0].message.content)
+        logger.info("✓ DeepSeek responded")
+        return result
+    except Exception as e:
+        logger.error(f"DeepSeek error: {e}")
+        return None
+
+async def call_grok(data_str: str, target: str) -> dict | None:
+    if not settings.GROK_API_KEY or "your_" in settings.GROK_API_KEY:
+        return None
+    try:
+        from openai import AsyncOpenAI
+        # xAI Grok uses OpenAI-compatible API
+        client = AsyncOpenAI(
+            api_key=settings.GROK_API_KEY,
+            base_url="https://api.x.ai/v1"
+        )
+        resp = await client.chat.completions.create(
+            model="grok-3", max_tokens=3000,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": ANALYSIS_PROMPT.format(target=target, data=data_str)}
+            ]
+        )
+        result = parse_json(resp.choices[0].message.content)
+        logger.info("✓ Grok responded")
+        return result
+    except Exception as e:
+        logger.error(f"Grok error: {e}")
+        return None
+
+async def call_perplexity(data_str: str, target: str) -> dict | None:
+    if not settings.PERPLEXITY_API_KEY or "your_" in settings.PERPLEXITY_API_KEY:
+        return None
+    try:
+        from openai import AsyncOpenAI
+        # Perplexity uses OpenAI-compatible API
+        # Uses sonar model which has live web search built in
+        client = AsyncOpenAI(
+            api_key=settings.PERPLEXITY_API_KEY,
+            base_url="https://api.perplexity.ai"
+        )
+        resp = await client.chat.completions.create(
+            model="sonar", max_tokens=3000,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": ANALYSIS_PROMPT.format(target=target, data=data_str)}
+            ]
+        )
+        result = parse_json(resp.choices[0].message.content)
+        logger.info("✓ Perplexity responded")
+        return result
+    except Exception as e:
+        logger.error(f"Perplexity error: {e}")
+        return None
+
+async def call_together(data_str: str, target: str) -> dict | None:
+    if not settings.TOGETHER_API_KEY or "your_" in settings.TOGETHER_API_KEY:
+        return None
+    try:
+        from openai import AsyncOpenAI
+        # Together AI uses OpenAI-compatible API
+        client = AsyncOpenAI(
+            api_key=settings.TOGETHER_API_KEY,
+            base_url="https://api.together.xyz/v1"
+        )
+        resp = await client.chat.completions.create(
+            # Meta Llama 3.3 70B — best open source model on Together
+            model="meta-llama/Llama-3.3-70B-Instruct-Turbo", max_tokens=3000,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": ANALYSIS_PROMPT.format(target=target, data=data_str)}
+            ]
+        )
+        result = parse_json(resp.choices[0].message.content)
+        logger.info("✓ Together AI responded")
+        return result
+    except Exception as e:
+        logger.error(f"Together AI error: {e}")
+        return None
+
 async def call_ollama(data_str: str, target: str) -> dict | None:
-    # Silently skip if Ollama is not running
     try:
         import httpx
         async with httpx.AsyncClient(timeout=2) as check:
@@ -386,7 +517,7 @@ async def call_ollama(data_str: str, target: str) -> dict | None:
         return None
 
 
-# ─── Schemas ─────────────────────────────────────────────────────────────────
+# ─── Main Analyzer ───────────────────────────────────────────────────────────
 
 from app.models.schemas import AIAnalysis
 
@@ -400,7 +531,7 @@ class MultiAIAnalyzer:
         if len(data_str) > 18000:
             data_str = data_str[:18000] + "\n...[truncated]"
 
-        # Run ALL AIs in parallel
+        # Run ALL 11 AIs in parallel
         ai_results = await asyncio.gather(
             call_claude(data_str, target),
             call_openai(data_str, target),
@@ -408,12 +539,16 @@ class MultiAIAnalyzer:
             call_groq(data_str, target),
             call_cohere(data_str, target),
             call_mistral(data_str, target),
+            call_deepseek(data_str, target),
+            call_grok(data_str, target),
+            call_perplexity(data_str, target),
+            call_together(data_str, target),
             call_ollama(data_str, target),
             return_exceptions=False
         )
 
         valid = [r for r in ai_results if r is not None]
-        logger.info(f"AI analysis: {len(valid)}/7 providers responded")
+        logger.info(f"AI analysis: {len(valid)}/11 providers responded")
 
         if valid:
             merged = merge_results(valid)
@@ -429,6 +564,8 @@ class MultiAIAnalyzer:
                     attack_surface=merged.get("attack_surface", {}),
                     port_risks=merged.get("port_risks", []),
                     threat_intel=merged.get("threat_intel", {}),
+                    cve_findings=merged.get("cve_findings", []),
+                    severity_findings=merged.get("severity_findings", []),
                 )
 
         logger.info("All AI providers unavailable — using local analysis")
@@ -444,7 +581,6 @@ class MultiAIAnalyzer:
         infrastructure = {"fingerprint_notes": []}
         threat_intel = {"threat_indicators": [], "blacklist_count": 0}
 
-        # GeoIP
         geo = data.get("geoip", {})
         if geo:
             country = geo.get("country", "")
@@ -459,7 +595,6 @@ class MultiAIAnalyzer:
             infrastructure["fingerprint_notes"].append(f"ASN: {asn}" if asn else "No ASN info")
             tags.append("has-geo")
 
-        # Blacklist
         bl = data.get("blacklist", {})
         if bl:
             listed = bl.get("listed_count", 0)
@@ -470,212 +605,36 @@ class MultiAIAnalyzer:
                 listed_on = [r["list"] for r in bl.get("results", []) if r.get("listed")]
                 findings.append(f"⚠️ Blacklisted on {listed}/{total} DNS blacklists: {', '.join(listed_on[:3])}")
                 threat_intel["threat_indicators"].append(f"Listed on {listed} DNSBL lists")
-                threat_intel["abuse_history"] = f"Listed on {listed} blacklists"
-                recommendations.append("Investigate blacklist listings — may indicate spam, botnet, or abuse")
+                recommendations.append("Investigate blacklist listings")
                 risk_score += min(listed * 12, 50)
                 tags.append("blacklisted")
             else:
                 findings.append(f"Clean — not listed on any of {total} DNS blacklists")
                 tags.append("clean-blacklist")
 
-        # DNS
-        dns = data.get("dns", {})
-        if dns:
-            a = dns.get("A", [])
-            mx = dns.get("MX", [])
-            ns = dns.get("NS", [])
-            txt = dns.get("TXT", [])
-            if a:
-                findings.append(f"Resolves to: {', '.join(a[:3])}")
-                attack_surface["exposed_services"].extend([f"DNS:53"])
-                tags.append("has-dns")
-            if mx:
-                findings.append(f"Mail servers: {', '.join(mx[:2])}")
-                attack_surface["exposed_services"].append("SMTP:25")
-                tags.append("has-mx")
-            if ns:
-                infrastructure["fingerprint_notes"].append(f"Nameservers: {', '.join(ns[:2])}")
-            if txt:
-                spf = [t for t in txt if 'spf' in t.lower()]
-                dmarc = [t for t in txt if 'dmarc' in t.lower()]
-                if spf:
-                    findings.append("SPF record configured — email spoofing protection active")
-                    tags.append("has-spf")
-                else:
-                    recommendations.append("Add SPF TXT record to prevent email spoofing")
-                    attack_surface["critical_exposures"].append("No SPF record — email spoofing possible")
-                if dmarc:
-                    tags.append("has-dmarc")
-
-        # SSL
         ssl = data.get("ssl", {})
-        live = ssl.get("live_cert", {}) if ssl else {}
-        if live.get("is_valid"):
-            issuer = live.get("issuer", {}).get("organizationName", "")
-            not_after = live.get("not_after", "")
-            san_count = len(live.get("san", []))
-            findings.append(f"Valid SSL/TLS certificate" + (f" by {issuer}" if issuer else "") + (f", expires {not_after}" if not_after else "") + (f", {san_count} SANs" if san_count else ""))
-            attack_surface["exposed_services"].append("HTTPS:443")
-            infrastructure["fingerprint_notes"].append(f"TLS cert issuer: {issuer}" if issuer else "TLS enabled")
-            tags.append("has-ssl")
-        elif ssl:
-            findings.append("No valid SSL/TLS certificate on port 443")
-            attack_surface["ssl_issues"].append("No valid SSL certificate")
-            attack_surface["critical_exposures"].append("HTTP without TLS — traffic unencrypted")
-            recommendations.append("Configure HTTPS with valid SSL certificate immediately")
-            risk_score += 15
-            tags.append("no-ssl")
-
-        # HTTP Headers
-        http = data.get("http_headers", {})
-        http_data = http.get("https", http.get("http", {})) if http else {}
-        if isinstance(http_data, dict) and http_data.get("status_code"):
-            server = http_data.get("server", "")
-            powered_by = http_data.get("powered_by", "")
-            missing = http_data.get("missing_security_headers", [])
-            if server and server != "Unknown":
-                findings.append(f"Web server: {server}" + (f" ({powered_by})" if powered_by and powered_by != "Unknown" else ""))
-                infrastructure["server_type"] = server
-                infrastructure["fingerprint_notes"].append(f"Server header: {server}")
-            if missing:
-                findings.append(f"Missing {len(missing)} HTTP security headers: {', '.join(missing[:4])}")
-                for h in missing:
-                    attack_surface["ssl_issues"].append(f"Missing header: {h}")
-                recommendations.append(f"Implement missing security headers: {', '.join(missing[:4])}")
-                risk_score += len(missing) * 2
-                tags.append("weak-headers")
-            else:
-                findings.append("All HTTP security headers properly configured")
-                tags.append("strong-headers")
-
-        # Subdomains
-        subs = data.get("subdomains", {})
-        if subs and subs.get("count", 0) > 0:
-            count = subs["count"]
-            sample = subs.get("subdomains", [])[:4]
-            findings.append(f"Found {count} subdomains via cert transparency: {', '.join(sample)}" + (f" +{count-4} more" if count > 4 else ""))
-            attack_surface["subdomains_count"] = count
-            if count > 20:
-                attack_surface["critical_exposures"].append(f"Large attack surface: {count} subdomains")
-                recommendations.append(f"Audit all {count} subdomains — each is a potential entry point")
-                risk_score += 5
-            tags.append(f"{count}-subdomains")
-
-        # WHOIS
-        whois = data.get("whois", {})
-        if whois:
-            registrar = whois.get("registrar", "")
-            expiry = whois.get("expiration_date", "")
-            org = whois.get("org", "")
-            country = whois.get("country", "")
-            if registrar:
-                findings.append(f"Domain registered via {registrar}" + (f", org: {org}" if org else "") + (f", country: {country}" if country else ""))
-                if expiry:
-                    findings.append(f"Domain expires: {str(expiry)[:10]}")
-                infrastructure["fingerprint_notes"].append(f"Registrar: {registrar}")
-                tags.append("whois-available")
-
-        # Shodan
-        shodan = data.get("shodan", {})
-        if shodan and shodan.get("found"):
-            ports = shodan.get("ports", [])
-            vulns = shodan.get("vulns", {})
-            os_info = shodan.get("os", "")
-            if os_info:
-                infrastructure["fingerprint_notes"].append(f"OS: {os_info}")
-            if ports:
-                findings.append(f"Open ports: {', '.join(map(str, ports[:10]))}")
-                attack_surface["total_entry_points"] = len(ports)
-                for port in ports:
-                    attack_surface["exposed_services"].append(f"port:{port}")
-                    risk = "low"
-                    note = "Standard service"
-                    if port in [23, 2323]: risk = "critical"; note = "Telnet — unencrypted, disable immediately"
-                    elif port in [3389]: risk = "high"; note = "RDP exposed — brute force target"
-                    elif port in [445, 139]: risk = "high"; note = "SMB — common ransomware vector"
-                    elif port in [1433, 3306, 5432, 27017]: risk = "high"; note = "Database port exposed to internet"
-                    elif port in [21]: risk = "medium"; note = "FTP — use SFTP instead"
-                    elif port in [22]: risk = "medium"; note = "SSH — ensure key-only auth"
-                    elif port in [80]: risk = "low"; note = "HTTP — ensure redirects to HTTPS"
-                    elif port in [443]: risk = "low"; note = "HTTPS — standard web traffic"
-                    if risk in ("high", "critical"):
-                        attack_surface["critical_exposures"].append(f"Port {port}: {note}")
-                    port_risks.append({"port": port, "service": note.split(" —")[0], "risk": risk, "note": note})
-                    risk_score += {"low": 0, "medium": 3, "high": 8, "critical": 15}.get(risk, 0)
-            if vulns:
-                cves = list(vulns.keys())
-                findings.append(f"⚠️ {len(cves)} CVEs detected: {', '.join(cves[:4])}")
-                threat_intel["threat_indicators"].extend(cves[:5])
-                risk_score += len(cves) * 8
-                recommendations.append(f"URGENT: Patch CVEs — {', '.join(cves[:3])}")
-                tags.append("has-cves")
-
-        # VirusTotal
-        vt = data.get("virustotal", {})
-        if vt and vt.get("found"):
-            malicious = vt.get("malicious", 0)
-            suspicious = vt.get("suspicious", 0)
-            reputation = vt.get("reputation", 0)
-            threat_intel["reputation_score"] = max(0, 100 + reputation)
-            threat_intel["malware_detected"] = malicious > 0
-            if malicious > 0:
-                findings.append(f"⚠️ VirusTotal: {malicious} AV engines flagged as MALICIOUS")
-                threat_intel["threat_indicators"].append(f"Flagged malicious by {malicious} AV engines")
-                risk_score += malicious * 8
-                tags.append("malicious-vt")
-                recommendations.append(f"CRITICAL: {malicious} AV engines flagged this — investigate immediately")
-            elif suspicious > 0:
-                findings.append(f"VirusTotal: {suspicious} engines flagged suspicious, reputation: {reputation}")
-                risk_score += suspicious * 3
-                tags.append("suspicious-vt")
-            else:
-                findings.append(f"VirusTotal: Clean — reputation score {reputation}")
-                tags.append("clean-vt")
-
-        # CDN detection
-        cdn_headers = ["cloudflare", "fastly", "akamai", "cloudfront", "cdn"]
-        if http_data:
-            headers_str = json.dumps(http_data.get("headers", {})).lower()
-            for cdn in cdn_headers:
-                if cdn in headers_str:
-                    infrastructure["cdn_detected"] = True
-                    infrastructure["cloud_provider"] = cdn.title()
-                    infrastructure["fingerprint_notes"].append(f"CDN detected: {cdn.title()}")
-                    tags.append(f"cdn-{cdn}")
-                    break
-
-        risk_score = min(risk_score, 100)
-        if risk_score <= 20: risk_level = "low"
-        elif risk_score <= 40: risk_level = "medium"
-        elif risk_score <= 65: risk_level = "high"
-        else: risk_level = "critical"
-
-        attack_surface["total_entry_points"] = attack_surface.get("total_entry_points", len(attack_surface["exposed_services"]))
-
-        geo_str = f"in {geo.get('city', '')}, {geo.get('country', '')}".strip(", ") if geo else "at unknown location"
-        isp_str = f"by {geo.get('isp', geo.get('org', 'unknown provider'))}" if geo else ""
-        bl_str = f"blacklisted on {bl.get('listed_count', 0)} lists" if bl and bl.get("listed_count", 0) > 0 else "not blacklisted"
-        ssl_str = "has valid SSL/TLS" if live.get("is_valid") else "no SSL detected"
-        ports_str = f"{len(shodan.get('ports', []))} open ports detected" if shodan and shodan.get("found") else "no port data available"
-        sub_str = f"{subs.get('count', 0)} subdomains discovered" if subs else ""
-
-        summary_parts = [
-            f"Target {target} is hosted {geo_str} {isp_str}.",
-            f"It is {bl_str} and {ssl_str}.",
-        ]
-        if ports_str: summary_parts.append(f"Shodan reports {ports_str}.")
-        if sub_str: summary_parts.append(f"Certificate transparency reveals {sub_str}.")
-        summary_parts.append(f"Overall risk assessment: {risk_score}/100 ({risk_level.upper()}).")
+        if ssl:
+            if ssl.get("expired"):
+                findings.append("⚠️ SSL certificate is EXPIRED")
+                attack_surface["ssl_issues"].append("Expired certificate")
+                risk_score += 20
+                tags.append("expired-ssl")
+            elif ssl.get("valid"):
+                days = ssl.get("days_remaining", 0)
+                findings.append(f"SSL valid — {days} days remaining")
+                tags.append("valid-ssl")
 
         return AIAnalysis(
-            summary=" ".join(summary_parts),
-            risk_level=risk_level,
-            risk_score=risk_score,
-            key_findings=findings or ["Scan completed — add AI API keys for deeper analysis"],
-            recommendations=recommendations or ["No immediate action required based on available data"],
-            tags=list(set(tags)),
+            summary=f"Local analysis of {target}. " + " ".join(findings[:3]),
+            risk_level="high" if risk_score > 60 else "medium" if risk_score > 30 else "low",
+            risk_score=min(risk_score, 100),
+            key_findings=findings[:8],
+            recommendations=recommendations[:5],
+            tags=tags,
             infrastructure=infrastructure,
             attack_surface=attack_surface,
             port_risks=port_risks,
             threat_intel=threat_intel,
+            cve_findings=[],
+            severity_findings=[],
         )

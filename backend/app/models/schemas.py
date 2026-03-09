@@ -1,45 +1,36 @@
-"""PhantomAI Pydantic Models"""
-from pydantic import BaseModel, field_validator
-from typing import Optional, Any, Dict, List
-from enum import Enum
-import re
+from pydantic import BaseModel
+from typing import Optional, List, Dict, Any
+from datetime import datetime
 
-class TargetType(str, Enum):
-    IP = "ip"
-    DOMAIN = "domain"
 
 class InvestigateRequest(BaseModel):
     target: str
-    tools: Optional[List[str]] = None
-
-    @field_validator("target")
-    @classmethod
-    def validate_target(cls, v: str) -> str:
-        v = v.strip().lower()
-        ip_pattern = r"^\d{1,3}(\.\d{1,3}){3}$"
-        domain_pattern = r"^([a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$"
-        if not re.match(ip_pattern, v) and not re.match(domain_pattern, v):
-            raise ValueError(f"Invalid IP address or domain: {v}")
-        return v
 
 class ToolResult(BaseModel):
-    tool_name: str
     status: str
     data: Optional[Any] = None
     error: Optional[str] = None
-    duration_ms: Optional[float] = None
+    duration: Optional[float] = None
 
 class SeverityFinding(BaseModel):
-    severity: str
+    severity: str        # critical | medium | ok
     category: str
     title: str
     detail: str
     fix: Optional[str] = None
 
+class CVEFinding(BaseModel):
+    software: str
+    cve_id: str
+    severity: str        # critical | high | medium | low
+    cvss_score: float
+    description: str
+    fix: str
+
 class AIAnalysis(BaseModel):
-    summary: str
-    risk_level: str
-    risk_score: int
+    summary: str = ""
+    risk_level: str = "low"
+    risk_score: int = 0
     key_findings: List[str] = []
     recommendations: List[str] = []
     tags: List[str] = []
@@ -48,13 +39,26 @@ class AIAnalysis(BaseModel):
     port_risks: List[Dict[str, Any]] = []
     threat_intel: Dict[str, Any] = {}
     severity_findings: List[SeverityFinding] = []
+    cve_findings: List[CVEFinding] = []
 
-class InvestigateResponse(BaseModel):
+class InvestigationResult(BaseModel):
     target: str
-    target_type: TargetType
-    timestamp: str
-    duration_ms: float
-    tools_run: int
-    tools_success: int
-    results: Dict[str, Any]
+    target_type: str
+    timestamp: datetime
+    tools_run: int = 0
+    tools_success: int = 0
+    results: Dict[str, Any] = {}
     ai_analysis: Optional[AIAnalysis] = None
+
+class ScanRecord(BaseModel):
+    id: int
+    target: str
+    target_type: str
+    timestamp: datetime
+    risk_level: Optional[str] = None
+    risk_score: Optional[int] = None
+    tools_run: int = 0
+    tools_success: int = 0
+
+    class Config:
+        from_attributes = True
