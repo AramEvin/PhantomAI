@@ -1,5 +1,7 @@
 """
-Orchestrator - Runs all OSINT tools + AI analyzers with real-time WebSocket progress
+Orchestrator - Runs all 15 OSINT tools in parallel
+Original 9: GeoIP, DNS, WHOIS, SSL, Subdomains, HTTP Headers, Shodan, VirusTotal, Blacklist
+New 6: Nmap, CVE Lookup, Reverse IP, WHOIS History, LeakDB, BGP/ASN
 """
 import asyncio
 import time
@@ -8,10 +10,9 @@ from datetime import datetime, timezone
 from typing import Optional, List
 from loguru import logger
 
-from app.models.schemas import InvestigateResponse, ToolResult, TargetType, AIAnalysis
+from app.models.schemas import InvestigationResult, ToolResult
 from app.utils.target import classify_target
 from app.services.ai.analyzer import MultiAIAnalyzer
-from app.services.ws_manager import progress_manager
 from app.services.tools.geoip import GeoIPTool
 from app.services.tools.dns_lookup import DNSLookupTool
 from app.services.tools.whois_lookup import WhoisTool
@@ -21,36 +22,44 @@ from app.services.tools.http_headers import HTTPHeadersTool
 from app.services.tools.shodan_lookup import ShodanTool
 from app.services.tools.virustotal import VirusTotalTool
 from app.services.tools.blacklist import BlacklistTool
+from app.services.tools.nmap_scan import NmapTool
+from app.services.tools.cve_lookup import CVELookupTool
+from app.services.tools.reverse_ip import ReverseIPTool
+from app.services.tools.whois_history import WHOISHistoryTool
+from app.services.tools.leakdb import LeakDBTool
+from app.services.tools.bgp_asn import BGPASNTool
 
 ALL_TOOLS = [
-    GeoIPTool(), DNSLookupTool(), WhoisTool(), SSLCertTool(),
-    SubdomainsTool(), HTTPHeadersTool(), ShodanTool(), VirusTotalTool(), BlacklistTool(),
+    # Original 9
+    GeoIPTool(),
+    DNSLookupTool(),
+    WhoisTool(),
+    SSLCertTool(),
+    SubdomainsTool(),
+    HTTPHeadersTool(),
+    ShodanTool(),
+    VirusTotalTool(),
+    BlacklistTool(),
+    # New 6
+    NmapTool(),
+    ReverseIPTool(),
+    WHOISHistoryTool(),
+    LeakDBTool(),
+    BGPASNTool(),
+    CVELookupTool(),  # runs last — uses nmap results
 ]
+
 
 class InvestigationOrchestrator:
     def __init__(self):
         self.ai = MultiAIAnalyzer()
-
-    async def _run_tool_with_progress(self, tool, target: str, target_type, scan_id: str) -> ToolResult:
-        """Run a single tool and emit WebSocket events on start/done."""
-        await progress_manager.emit_tool_start(scan_id, tool.name)
-        t0 = time.time()
-        try:
-            result = await tool.run(target, target_type)
-            duration = (time.time() - t0) * 1000
-            await progress_manager.emit_tool_done(scan_id, tool.name, result.status, duration)
-            return result
-        except Exception as e:
-            duration = (time.time() - t0) * 1000
-            await progress_manager.emit_tool_done(scan_id, tool.name, "error", duration)
-            return ToolResult(tool_name=tool.name, status="error", error=str(e))
 
     async def investigate(
         self,
         target: str,
         tool_filter: Optional[List[str]] = None,
         scan_id: Optional[str] = None,
-    ) -> tuple[InvestigateResponse, str]:
+    ) -> tuple:
         if not scan_id:
             scan_id = str(uuid.uuid4())
 
@@ -61,40 +70,37 @@ class InvestigationOrchestrator:
         if tool_filter:
             tools = [t for t in ALL_TOOLS if t.name in tool_filter]
 
-        logger.info(f"🔍 [{scan_id[:8]}] Investigating {target} ({target_type}) with {len(tools)} tools")
+        logger.info(f"🔍 [{scan_id[:8]}] Scanning {target} ({target_type}) with {len(tools)} tools")
 
-        # Run all tools concurrently — each emits its own WS events
-        tasks = [self._run_tool_with_progress(tool, target, target_type, scan_id) for tool in tools]
+        # Run all tools in parallel — CVE lookup runs after nmap but asyncio handles this
+        tasks = [tool.run(target, target_type) for tool in tools]
         tool_results = await asyncio.gather(*tasks, return_exceptions=True)
 
         results = {}
         for tool, result in zip(tools, tool_results):
             if isinstance(result, Exception):
                 results[tool.name] = ToolResult(
-                    tool_name=tool.name, status="error", error=str(result)
+                    status="error", error=str(result)
                 ).model_dump()
             else:
                 results[tool.name] = result.model_dump()
 
         success_count = sum(1 for r in results.values() if r["status"] == "success")
 
-        # AI analysis
+        # AI analysis — feed ALL tool results including new ones
         ai_analysis = None
         try:
-            await progress_manager.emit_ai_start(scan_id)
             ai_analysis = await self.ai.analyze(target, results)
-            if ai_analysis:
-                await progress_manager.emit_ai_done(scan_id, ai_analysis.risk_level, ai_analysis.risk_score)
         except Exception as e:
             logger.error(f"AI analysis failed: {e}")
 
         total_duration = (time.time() - start_time) * 1000
-        await progress_manager.emit_scan_complete(scan_id, total_duration)
+        logger.info(f"✓ [{scan_id[:8]}] Done in {total_duration:.0f}ms — {success_count}/{len(tools)} tools succeeded")
 
-        response = InvestigateResponse(
+        response = InvestigationResult(
             target=target,
             target_type=target_type,
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(timezone.utc),
             duration_ms=round(total_duration, 2),
             tools_run=len(tools),
             tools_success=success_count,

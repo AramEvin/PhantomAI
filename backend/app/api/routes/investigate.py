@@ -1,18 +1,18 @@
 """
-Investigation routes with WebSocket progress + DB persistence
+Investigation routes with DB persistence
 """
 import uuid
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
 from app.models.schemas import InvestigateRequest
 from app.services.orchestrator import InvestigationOrchestrator
-from app.services.ws_manager import progress_manager
 from app.database import get_db, ScanRecord
 
 router = APIRouter()
 orchestrator = InvestigationOrchestrator()
+
 
 @router.post("/investigate")
 async def investigate(request: InvestigateRequest, db: AsyncSession = Depends(get_db)):
@@ -30,7 +30,7 @@ async def investigate(request: InvestigateRequest, db: AsyncSession = Depends(ge
         ai_dict = response.ai_analysis.model_dump() if response.ai_analysis else None
         record = ScanRecord(
             target=response.target,
-            target_type=response.target_type.value,
+            target_type=str(response.target_type),
             duration_ms=response.duration_ms,
             tools_run=response.tools_run,
             tools_success=response.tools_success,
@@ -47,14 +47,3 @@ async def investigate(request: InvestigateRequest, db: AsyncSession = Depends(ge
         logger.error(f"DB save failed: {e}")
 
     return response
-
-@router.websocket("/ws/scan/{scan_id}")
-async def scan_websocket(scan_id: str, ws: WebSocket):
-    """WebSocket endpoint — client connects before POSTing to /investigate."""
-    await progress_manager.connect(scan_id, ws)
-    try:
-        # Keep connection open until client disconnects
-        while True:
-            await ws.receive_text()
-    except WebSocketDisconnect:
-        progress_manager.disconnect(scan_id, ws)

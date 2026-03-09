@@ -1,10 +1,17 @@
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+from enum import Enum
+
+
+class TargetType(str, Enum):
+    ip = "ip"
+    domain = "domain"
 
 
 class InvestigateRequest(BaseModel):
     target: str
+    tools: Optional[List[str]] = None  # if None, run all tools
 
 class ToolResult(BaseModel):
     status: str
@@ -45,6 +52,7 @@ class InvestigationResult(BaseModel):
     target: str
     target_type: str
     timestamp: datetime
+    duration_ms: float = 0.0
     tools_run: int = 0
     tools_success: int = 0
     results: Dict[str, Any] = {}

@@ -1,33 +1,41 @@
 """
-Utility functions for target classification and validation
+Target classifier — determines if input is an IP or domain
+Provides: classify_target, resolve_to_ip, TargetType (for backward compat)
 """
 import re
 import socket
-from app.models.schemas import TargetType
 
-def classify_target(target: str) -> TargetType:
-    """Determine if target is IP or domain."""
-    ip_pattern = r"^\d{1,3}(\.\d{1,3}){3}$"
-    if re.match(ip_pattern, target):
+
+# String constants for backward compat — tools that import TargetType
+# can use TargetType.IP / TargetType.DOMAIN or just compare to "ip"/"domain"
+class TargetType:
+    IP = "ip"
+    DOMAIN = "domain"
+
+
+def classify_target(target: str) -> str:
+    """Returns 'ip' or 'domain'."""
+    target = target.strip().lower()
+
+    # IPv4
+    if re.match(r"^(\d{1,3}\.){3}\d{1,3}$", target):
+        parts = target.split(".")
+        if all(0 <= int(p) <= 255 for p in parts):
+            return TargetType.IP
+
+    # IPv6 (basic)
+    if ":" in target and re.match(r"^[0-9a-f:]+$", target):
         return TargetType.IP
+
     return TargetType.DOMAIN
 
-def resolve_to_ip(domain: str) -> str | None:
-    """Resolve domain to IP address."""
-    try:
-        return socket.gethostbyname(domain)
-    except Exception:
-        return None
 
-def is_private_ip(ip: str) -> bool:
-    """Check if IP is private/internal."""
-    parts = ip.split(".")
-    if len(parts) != 4:
-        return False
-    first, second = int(parts[0]), int(parts[1])
-    return (
-        first == 10 or
-        (first == 172 and 16 <= second <= 31) or
-        (first == 192 and second == 168) or
-        first == 127
-    )
+def resolve_to_ip(target: str) -> str:
+    """Resolve a domain to its IP address. Returns the IP, or target unchanged if already an IP."""
+    target = target.strip().lower()
+    if classify_target(target) == TargetType.IP:
+        return target
+    try:
+        return socket.gethostbyname(target)
+    except Exception:
+        return target

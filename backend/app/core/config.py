@@ -11,15 +11,13 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = "postgresql+asyncpg://user:password@localhost:5432/phantomdb"
 
-    # Existing AI providers
+    # AI Providers
     ANTHROPIC_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
     GROQ_API_KEY: str = ""
     COHERE_API_KEY: str = ""
     MISTRAL_API_KEY: str = ""
-
-    # New AI providers
     DEEPSEEK_API_KEY: str = ""
     GROK_API_KEY: str = ""
     PERPLEXITY_API_KEY: str = ""
@@ -29,9 +27,15 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "llama3"
 
-    # OSINT
+    # OSINT — Original
     SHODAN_API_KEY: str = ""
     VIRUSTOTAL_API_KEY: str = ""
+
+    # OSINT — New tools
+    NVD_API_KEY: str = ""              # nvd.nist.gov/developers — free, raises rate limit
+    HIBP_API_KEY: str = ""             # haveibeenpwned.com/API/Key — ~$4/month
+    WHOISXML_API_KEY: str = ""         # whoisxmlapi.com — 500 free/month
+    SECURITYTRAILS_API_KEY: str = ""   # securitytrails.com — 50 free/month
 
     ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
     CACHE_TTL: int = 300
